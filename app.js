@@ -496,7 +496,7 @@ function mdRender(src) {
   for (const raw of src.replace(/\r/g, '').split('\n')) {
     const line = raw.trimEnd(); let m;
     if (!line.trim() || /^<!--.*-->$/.test(line.trim())) { fp(); fl(); continue; }
-    if ((m = line.match(/^(#{1,4})\s+(.*)$/))) { fp(); fl(); const lvl = m[1].length; const id = `by-${++n}`; if (lvl <= 2) toc.push({ id, t: m[2] }); html += `<h${lvl + 1} id="${id}">${inline(m[2])}</h${lvl + 1}>`; continue; }
+    if ((m = line.match(/^(#{1,4})\s+(.*)$/))) { fp(); fl(); const lvl = m[1].length; const id = `by-${++n}`; toc.push({ id, t: m[2], lvl }); html += `<h${lvl + 1} id="${id}">${inline(m[2])}</h${lvl + 1}>`; continue; }
     if ((m = line.match(/^\s*[-*•]\s+(.*)$/))) { fp(); if (list !== 'ul') { fl(); html += '<ul>'; list = 'ul'; } html += `<li>${inline(m[1])}</li>`; continue; }
     if ((m = line.match(/^\s*(\d+)[.)]\s+(.*)$/))) { fp(); if (list !== 'ol') { fl(); html += `<ol start="${m[1]}">`; list = 'ol'; } html += `<li>${inline(m[2])}</li>`; continue; }
     fl(); para.push(line.trim());
@@ -512,9 +512,16 @@ async function fillBylaws() {
   try {
     if (bylawsCache == null) { const r = await fetch('bylaws.md', { cache: 'no-cache' }); if (!r.ok) throw new Error(r.status); bylawsCache = await r.text(); }
   } catch { box.innerHTML = `<h1 class="page-title">Bylaws</h1>${empty('The bylaws file is missing. Add a file named bylaws.md to the repository.')}`; return; }
-  const { html, toc } = mdRender(bylawsCache);
-  box.innerHTML = `${/^#\s/m.test(bylawsCache.split('\n').find((l) => l.trim()) || '') ? '' : '<h1 class="page-title">Bylaws</h1>'}${toc.length > 3 ? `<nav class="toc" aria-label="Bylaws sections"><h2>Sections</h2><ol>${toc.map((x) => `<li><a href="#bylaws" data-jump="${x.id}">${esc(x.t.replace(/\*\*/g, ''))}</a></li>`).join('')}</ol></nav>` : ''}<article class="bylaws">${html}</article>`;
-  const first = box.querySelector('article h2'); if (first && !box.querySelector('.page-title')) first.classList.add('page-title');
+  // Pull a leading "# Title" out so it sits above the section list.
+  const lines = bylawsCache.replace(/\r/g, '').split('\n');
+  const ti = lines.findIndex((l) => l.trim());
+  let title = 'Bylaws', body = bylawsCache;
+  if (ti >= 0 && /^#\s+/.test(lines[ti])) { title = lines[ti].replace(/^#\s+/, ''); body = lines.slice(ti + 1).join('\n'); }
+  let sub = '';
+  { const bl = body.split('\n'); const k = bl.findIndex((l) => l.trim()); if (k >= 0 && !/^[#\-*\d]/.test(bl[k].trim()) && bl[k].trim().length < 60) { sub = bl[k].trim(); body = bl.slice(k + 1).join('\n'); } }
+  const { html, toc } = mdRender(body);
+  const secs = toc.filter((x) => x.lvl === 2);
+  box.innerHTML = `<h1 class="page-title">${esc(title)}</h1>${sub ? `<p class="status">${esc(sub)}</p>` : ''}${secs.length > 3 ? `<nav class="toc" aria-label="Bylaws sections"><h2>Sections</h2><ol>${secs.map((x) => `<li><a href="#bylaws" data-jump="${x.id}">${esc(x.t.replace(/\*\*/g, ''))}</a></li>`).join('')}</ol></nav>` : ''}<article class="bylaws">${html}</article>`;
   box.querySelectorAll('[data-jump]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); document.getElementById(a.dataset.jump)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }));
 }
 
