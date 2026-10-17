@@ -348,6 +348,17 @@ function streaksHtml() {
 }
 
 // ---------- TRADES & MOVES ----------
+function pickTxt(s, pk, val) {
+  const base = `${esc(pk.s)} round ${esc(pk.r)} pick`;
+  if (!pk.pending) return `${base}, became ${pl(pk.pid, false)} (${f2(val)})`;
+  return `${base} (est. ${f2(val)})`;
+}
+function pickNote() {
+  const d = (window.LEAGUE_CONFIG && window.LEAGUE_CONFIG.pickValues) || { 1: 90, 2: 40, 3: 15, 4: 5 };
+  const est = [1, 2, 3, 4].map((r) => { const e = pickEstimate(M, r); return `round ${r}: ${f2(e.v)}${e.source === 'league' ? ' (league average)' : ''}`; }).join(', ');
+  void d;
+  return `<p class="note">While rostered counts points the players scored in their new team's starting lineup after the trade, including later seasons. Season total counts everything they scored the rest of that season, on any team. A draft pick counts as the player it became once the draft happens. Until then it carries a preset value: ${est}. Presets switch to this league's own rookie averages once there are enough past picks.</p>`;
+}
 let tradeMetric = 'wr', moveType = 'trade', moveSeason = 'all', moveMgr = 'all';
 function viewTrades() {
   const all = M.seasons.flatMap((s) => s.tx.map((t) => ({ s, t })));
@@ -359,10 +370,12 @@ function viewTrades() {
     out += `<h2>Grand Larceny</h2>${seg('Trade value', [['wr', 'While rostered'], ['st', 'Season total']], tradeMetric)}`;
     out += lb.length ? `<ol class="larceny">${lb.map((x, i) => {
       const others = x.sides.filter((o) => o !== x.sd);
-      const gave = others.flatMap((o) => o.items.filter((it) => x.t.drops[it.pid] === x.sd.rid));
       const v = (it) => (tradeMetric === 'wr' ? it.wr : it.st);
-      return `<li><span class="rk">${i + 1}</span><div><p><b>${mlink(x.sd.uid)}</b> won by <b class="gold">${f2(x.sd[key])}</b> points <small>${x.s.season}, week ${x.t.wk}</small></p><p class="note">Got ${x.sd.items.map((it) => `${pl(it.pid, false)} (${f2(v(it))})`).join(', ') || 'picks or FAAB only'}. Gave ${gave.map((it) => `${pl(it.pid, false)} (${f2(v(it))})`).join(', ') || 'picks or FAAB only'}${others.length ? ` to ${others.map((o) => mlink(o.uid)).join(' and ')}` : ''}.</p></div></li>`;
-    }).join('')}</ol><p class="note">While rostered counts points the players scored in their new team's starting lineup after the trade, including later seasons. Season total counts everything they scored the rest of that season, on any team. Draft picks aren't scored.</p>` : '<p class="note">No trade has a clear winner yet.</p>';
+      const itemTxt = (it) => `${pl(it.pid, false)} (${f2(v(it))})`;
+      const got = [...x.sd.items.map(itemTxt), ...x.sd.picks.map((pk) => pickTxt(x.s, pk, v(pk)))];
+      const gave = others.flatMap((o) => [...o.items.filter((it) => x.t.drops[it.pid] === x.sd.rid).map(itemTxt), ...o.picks.filter((pk) => pk.f === x.sd.rid).map((pk) => pickTxt(x.s, pk, v(pk)))]);
+      return `<li><span class="rk">${i + 1}</span><div><p><b>${mlink(x.sd.uid)}</b> won by <b class="gold">${f2(x.sd[key])}</b> points <small>${x.s.season}, week ${x.t.wk}${x.sd.hasEst ? ', includes pick estimates' : ''}</small></p><p class="note">Got ${got.join(', ') || 'FAAB only'}. Gave ${gave.join(', ') || 'FAAB only'}${others.length ? ` to ${others.map((o) => mlink(o.uid)).join(' and ')}` : ''}.</p></div></li>`;
+    }).join('')}</ol>${pickNote()}` : '<p class="note">No trade has a clear winner yet.</p>';
   }
   // history with filters
   const seasons = [['all', 'All seasons'], ...[...M.seasons].reverse().map((s) => [String(s.season), String(s.season)])];
@@ -378,7 +391,7 @@ function moveHtml(s, t) {
   const when = `${s.season}, week ${t.wk}`;
   if (t.type === 'trade') {
     const sides = t.rids.map((rid) => {
-      const got = [...Object.entries(t.adds).filter(([, to]) => to === rid).map(([id]) => pl(id)), ...t.picks.filter((p) => p.to === rid).map((p) => `${esc(p.s)} round ${esc(p.r)} pick${p.o !== rid ? ` <span class="pos">(${tname(s, p.o)}'s)</span>` : ''}`), ...t.faab.filter((b) => b.to === rid).map((b) => `$${esc(b.a)} FAAB`)];
+      const got = [...Object.entries(t.adds).filter(([, to]) => to === rid).map(([id]) => pl(id)), ...t.picks.filter((p) => p.to === rid).map((p) => { const res = resolvePick(M, p); return `${esc(p.s)} round ${esc(p.r)} pick${p.o !== rid ? ` <span class="pos">(${tname(s, p.o)}'s)</span>` : ''}${res ? ` <span class="pos">became</span> ${pl(res.pid)}` : ''}`; }), ...t.faab.filter((b) => b.to === rid).map((b) => `$${esc(b.a)} FAAB`)];
       return `<div><h3>${tname(s, rid)} gets</h3><ul>${got.length ? got.map((g) => `<li>${g}</li>`).join('') : '<li>Nothing</li>'}</ul></div>`;
     }).join('');
     return `<div class="move trade"><div class="kind">Trade<small>${when}</small></div><div class="trade-sides">${sides}</div></div>`;
@@ -469,12 +482,44 @@ function viewLeague() {
   const scoring = s.rec === 1 ? 'Full PPR' : s.rec === 0.5 ? 'Half PPR' : s.rec ? `${s.rec} per catch` : 'Standard';
   const facts = [['Teams', Object.keys(s.teams).length], ['Scoring', scoring], ['Starting lineup', lineup], ['Bench, IR, taxi', `${s.positions.filter((p) => p === 'BN').length}, ${s.ir}, ${s.taxi}`], ['Playoffs', `Top ${s.pt}, starting week ${s.ps}`], ['Trade deadline', s.deadline && s.deadline < 99 ? `Week ${s.deadline}` : 'None'], ['FAAB budget', s.budget != null ? `$${s.budget}` : 'Rolling waivers'], ['Seasons on Sleeper', M.seasons.map((x) => x.season).join(', ')]];
   const by = window.LEAGUE_CONFIG?.bylawsUrl;
-  return `<h1 class="page-title">League</h1><h2>Rules at a glance</h2><dl class="facts">${facts.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>${by ? `<p><a href="${esc(by)}">Read the full bylaws</a></p>` : ''}
+  return `<h1 class="page-title">League</h1><h2>Rules at a glance</h2><dl class="facts">${facts.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl><p><a href="#bylaws">Read the full bylaws</a>${by ? ` or <a href="${esc(by)}">open the original document</a>` : ''}.</p>
   <h2>How this site works</h2><p class="note">Every page pulls straight from Sleeper when it loads, so scores, trades, and standings are always current. Finished seasons are saved in your browser to load faster. When Sleeper starts a new season, the site finds it automatically.</p>`;
 }
 
+// ---------- BYLAWS ----------
+let bylawsCache = null;
+function mdRender(src) {
+  const inline = (x) => esc(x).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/(^|[^*])\*(?!\s)([^*]+?)\*/g, '$1<em>$2</em>').replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>');
+  let html = '', list = null, para = []; const toc = []; let n = 0;
+  const fp = () => { if (para.length) { html += `<p>${inline(para.join(' '))}</p>`; para = []; } };
+  const fl = () => { if (list) { html += `</${list}>`; list = null; } };
+  for (const raw of src.replace(/\r/g, '').split('\n')) {
+    const line = raw.trimEnd(); let m;
+    if (!line.trim() || /^<!--.*-->$/.test(line.trim())) { fp(); fl(); continue; }
+    if ((m = line.match(/^(#{1,4})\s+(.*)$/))) { fp(); fl(); const lvl = m[1].length; const id = `by-${++n}`; if (lvl <= 2) toc.push({ id, t: m[2] }); html += `<h${lvl + 1} id="${id}">${inline(m[2])}</h${lvl + 1}>`; continue; }
+    if ((m = line.match(/^\s*[-*•]\s+(.*)$/))) { fp(); if (list !== 'ul') { fl(); html += '<ul>'; list = 'ul'; } html += `<li>${inline(m[1])}</li>`; continue; }
+    if ((m = line.match(/^\s*(\d+)[.)]\s+(.*)$/))) { fp(); if (list !== 'ol') { fl(); html += `<ol start="${m[1]}">`; list = 'ol'; } html += `<li>${inline(m[2])}</li>`; continue; }
+    fl(); para.push(line.trim());
+  }
+  fp(); fl();
+  return { html, toc };
+}
+function viewBylaws() {
+  return `<div id="bylaws"><p class="status">Loading the bylaws…</p></div>`;
+}
+async function fillBylaws() {
+  const box = $('#bylaws'); if (!box) return;
+  try {
+    if (bylawsCache == null) { const r = await fetch('bylaws.md', { cache: 'no-cache' }); if (!r.ok) throw new Error(r.status); bylawsCache = await r.text(); }
+  } catch { box.innerHTML = `<h1 class="page-title">Bylaws</h1>${empty('The bylaws file is missing. Add a file named bylaws.md to the repository.')}`; return; }
+  const { html, toc } = mdRender(bylawsCache);
+  box.innerHTML = `${/^#\s/m.test(bylawsCache.split('\n').find((l) => l.trim()) || '') ? '' : '<h1 class="page-title">Bylaws</h1>'}${toc.length > 3 ? `<nav class="toc" aria-label="Bylaws sections"><h2>Sections</h2><ol>${toc.map((x) => `<li><a href="#bylaws" data-jump="${x.id}">${esc(x.t.replace(/\*\*/g, ''))}</a></li>`).join('')}</ol></nav>` : ''}<article class="bylaws">${html}</article>`;
+  const first = box.querySelector('article h2'); if (first && !box.querySelector('.page-title')) first.classList.add('page-title');
+  box.querySelectorAll('[data-jump]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); document.getElementById(a.dataset.jump)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }));
+}
+
 // ---------- router ----------
-const VIEWS = { home: viewHome, standings: viewStandings, power: viewPower, seasons: viewSeasons, records: viewRecords, h2h: viewH2H, fun: viewFun, trades: viewTrades, managers: viewManagers, drafts: viewDrafts, league: viewLeague };
+const VIEWS = { home: viewHome, standings: viewStandings, power: viewPower, seasons: viewSeasons, records: viewRecords, h2h: viewH2H, fun: viewFun, trades: viewTrades, managers: viewManagers, drafts: viewDrafts, league: viewLeague, bylaws: viewBylaws };
 function route() {
   if (!M) return;
   const [tab = 'home', a, b] = location.hash.slice(1).split('/');
@@ -488,6 +533,7 @@ function route() {
 function bind(key, a) {
   const segs = document.querySelectorAll('#view .seg');
   const on = (i, fn) => segs[i]?.querySelectorAll('button').forEach((btn) => btn.addEventListener('click', () => fn(btn.dataset.v)));
+  if (key === 'bylaws') fillBylaws();
   if (key === 'power') requestAnimationFrame(() => requestAnimationFrame(() => $('#field')?.classList.remove('pre')));
   if (key === 'standings') on(0, (v) => { standMode = v; route(); });
   if (key === 'seasons') on(0, (v) => (location.hash = `seasons/${v}`));

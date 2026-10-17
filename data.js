@@ -3,7 +3,7 @@
 // caches finished seasons in the browser, and computes all stats.
 
 const API = 'https://api.sleeper.app/v1';
-const CACHE = 'tp1';
+const CACHE = 'tp2';
 const FPOS = new Set(['QB', 'RB', 'WR', 'TE', 'K', 'DEF']);
 
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -113,7 +113,7 @@ async function loadSeason(league, state) {
   for (const d of drafts || []) {
     if (d.status !== 'complete') continue;
     const picks = (await api(`/draft/${d.draft_id}/picks`)) || [];
-    dr.push({ id: d.draft_id, type: d.type, picks: picks.map((p) => ({ r: p.round, n: p.pick_no, rid: p.roster_id, pid: p.player_id, nm: [p.metadata?.first_name, p.metadata?.last_name].filter(Boolean).join(' '), pos: p.metadata?.position || '', tm: p.metadata?.team || '' })) });
+    dr.push({ id: d.draft_id, type: d.type, slots: d.slot_to_roster_id || {}, picks: picks.map((p) => ({ r: p.round, n: p.pick_no, ds: p.draft_slot, rid: p.roster_id, pid: p.player_id, nm: [p.metadata?.first_name, p.metadata?.last_name].filter(Boolean).join(' '), pos: p.metadata?.position || '', tm: p.metadata?.team || '' })) });
   }
   const st = league.settings || {};
   const lastScored = league.status === 'complete' ? 18 : Number.isInteger(st.last_scored_leg) ? Math.min(st.last_scored_leg, lastWeek) : Math.max(0, lastWeek - 1);
@@ -313,36 +313,74 @@ function h2h(M, u1, u2, kinds = ['reg', 'title', 'place', 'cons']) {
   return o;
 }
 
+// ---------- draft pick values ----------
+// A traded pick is worth the player it became once the draft happens. Until then it carries
+// a preset value by round: this league's own average rookie-season output for that round
+// (once there are enough past picks), otherwise the defaults in config.js.
+function resolvePick(M, pk) {
+  const ss = M.seasons.find((x) => x.season === Number(pk.s));
+  if (!ss) return null;
+  for (const d of ss.drafts) {
+    const hit = d.picks.find((x) => x.r === pk.r && Number(d.slots[x.ds] ?? d.slots[String(x.ds)]) === Number(pk.o));
+    if (hit && hit.pid) return { ss, pid: hit.pid };
+  }
+  return null;
+}
+function seasonPoints(ss, pid, fromWeek = 0) {
+  let t = 0;
+  for (const wk of ss.weeks) { if (!ss.isFinal(wk.w) || wk.w <= fromWeek) continue; for (const e of wk.e) if (e.pp[pid] != null) t += e.pp[pid]; }
+  return t;
+}
+function pickEstimate(M, round) {
+  M._est ||= {};
+  if (M._est[round] != null) return M._est[round];
+  const vals = [];
+  for (const ss of M.seasons.slice(1)) { // skip the startup draft, which was veterans
+    if (ss.status !== 'complete') continue;
+    for (const d of ss.drafts) for (const p of d.picks) if (p.r === round && p.pid) vals.push(seasonPoints(ss, p.pid));
+  }
+  const defs = (window.LEAGUE_CONFIG && window.LEAGUE_CONFIG.pickValues) || { 1: 90, 2: 40, 3: 15, 4: 5 };
+  const keys = Object.keys(defs).map(Number).sort((a, b) => a - b);
+  const fallback = defs[round] ?? defs[keys[keys.length - 1]] ?? 0;
+  const est = vals.length >= 6 ? r2(mean(vals)) : fallback;
+  M._est[round] = { v: est, source: vals.length >= 6 ? 'league' : 'default' };
+  return M._est[round];
+}
+
 // trade value: "while rostered" = points the players scored in the new team's starting lineup afterward (any season);
 // "season total" = everything they scored the rest of that season, on any team.
 function tradeValues(M, s, t) {
   const after = (season, w) => season > s.season || (season === s.season && w > t.wk);
+  const wrFor = (uid, pid) => {
+    let wr = 0;
+    for (const ss of M.seasons) {
+      if (ss.season < s.season) continue;
+      const myRid = Object.values(ss.teams).find((x) => x.uid === uid)?.rid;
+      for (const wk of ss.weeks) {
+        if (!ss.isFinal(wk.w) || !after(ss.season, wk.w)) continue;
+        const e = wk.e.find((x) => x.rid === myRid);
+        if (e && e.st.includes(pid)) wr += e.pp[pid] || 0;
+      }
+    }
+    return r2(wr);
+  };
   const sides = t.rids.map((rid) => {
     const uid = s.uid(rid);
-    const got = Object.entries(t.adds).filter(([, to]) => to === rid).map(([pid]) => pid);
-    const value = (pid) => {
-      let wr = 0, st = 0;
-      for (const ss of M.seasons) {
-        if (ss.season < s.season) continue;
-        const myRid = Object.values(ss.teams).find((x) => x.uid === uid)?.rid;
-        for (const wk of ss.weeks) {
-          if (!ss.isFinal(wk.w) || !after(ss.season, wk.w)) continue;
-          for (const e of wk.e) {
-            if (ss.season === s.season && e.pp[pid] != null) st += e.pp[pid];
-            if (e.rid === myRid && e.st.includes(pid)) wr += e.pp[pid] || 0;
-          }
-        }
-      }
-      return { pid, wr: r2(wr), st: r2(st) };
-    };
-    const items = got.map(value);
-    return { rid, uid, items, picks: t.picks.filter((p) => p.to === rid), faab: sum(t.faab.filter((b) => b.to === rid).map((b) => b.a)), wr: r2(sum(items.map((i) => i.wr))), st: r2(sum(items.map((i) => i.st))) };
+    const items = Object.entries(t.adds).filter(([, to]) => to === rid).map(([pid]) => ({ pid, wr: wrFor(uid, pid), st: r2(seasonPoints(s, pid, t.wk)) }));
+    const picks = t.picks.filter((p) => p.to === rid).map((p) => {
+      const res = resolvePick(M, p);
+      if (res) return { ...p, pid: res.pid, wr: wrFor(uid, res.pid), st: r2(seasonPoints(res.ss, res.pid, res.ss.season === s.season ? t.wk : 0)), pending: false };
+      const e = pickEstimate(M, p.r);
+      return { ...p, wr: e.v, st: e.v, pending: true, source: e.source };
+    });
+    const tot = (k) => r2(sum(items.map((i) => i[k])) + sum(picks.map((i) => i[k])));
+    return { rid, uid, items, picks, faab: sum(t.faab.filter((b) => b.to === rid).map((b) => b.a)), wr: tot('wr'), st: tot('st') };
   });
   for (const sd of sides) {
     const others = sides.filter((x) => x !== sd);
-    const gaveWr = sum(others.map((o) => sum(o.items.filter((i) => t.drops[i.pid] === sd.rid).map((i) => i.wr))));
-    const gaveSt = sum(others.map((o) => sum(o.items.filter((i) => t.drops[i.pid] === sd.rid).map((i) => i.st))));
-    sd.netWr = r2(sd.wr - gaveWr); sd.netSt = r2(sd.st - gaveSt);
+    const gave = (k) => sum(others.map((o) => sum(o.items.filter((i) => t.drops[i.pid] === sd.rid).map((i) => i[k])) + sum(o.picks.filter((p) => p.f === sd.rid).map((p) => p[k]))));
+    sd.netWr = r2(sd.wr - gave('wr')); sd.netSt = r2(sd.st - gave('st'));
+    sd.hasEst = sd.picks.some((p) => p.pending) || others.some((o) => o.picks.some((p) => p.pending && p.f === sd.rid));
   }
   return sides;
 }

@@ -14,13 +14,14 @@ A free league history and stats site that runs itself. Every page loads live fro
 - **Trades**: Grand Larceny leaderboards (while rostered and season total) and every move, filterable by type, season, and manager.
 - **Managers**: profiles with career stats, titles and rings, nemesis, favorite victim, and arch-rival, a trading style, draft capital efficiency, season grades, and past team names. Also lists former managers and founding members.
 - **Drafts**: every draft board, plus a search across all drafts.
-- **League**: rules at a glance and an optional bylaws link.
+- **League**: rules at a glance.
+- **Bylaws**: the full league bylaws, with a clickable section list.
 
 ## One-time setup (about 10 minutes)
 
 1. **Make a free account** at github.com.
 2. **Create a repository.** Click **New**, name it `tush-pushers`, choose **Public**, and click **Create repository**.
-3. **Upload the files.** Click **uploading an existing file**, drag in everything from this folder, and click **Commit changes**. The files are `index.html`, `app.js`, `data.js`, `config.js`, `README.md`, and `.nojekyll`.
+3. **Upload the files.** Click **uploading an existing file**, drag in everything from this folder, and click **Commit changes**. The files are `index.html`, `app.js`, `data.js`, `config.js`, `bylaws.md`, `README.md`, and `.nojekyll`.
    - `.nojekyll` is a hidden file. On a Mac, press `Cmd + Shift + .` in Finder to see it. The site works without it, so don't worry if it's missing.
 4. **Turn on the site.** Go to **Settings > Pages**. Under **Build and deployment**, set **Source** to **Deploy from a branch**, choose **main** and **/(root)**, then click **Save**.
 5. **Open it** after a minute or two at `https://YOUR-USERNAME.github.io/tush-pushers/`. The link also appears on the same Pages screen.
@@ -36,9 +37,18 @@ That's it. There's no step 6.
 
 The only things it depends on are GitHub Pages and Sleeper's public API. If Sleeper ever changed how its API works, the code would need a fix.
 
+## Updating the bylaws
+
+The Bylaws page shows the file `bylaws.md`. When the rules change, open `bylaws.md` on GitHub, click the pencil icon, edit, and click **Commit changes**. The site updates within a minute or two.
+
+## Draft picks in trade grades
+
+A traded pick counts as the player it became once the draft happens. Until then, it carries a preset value by round. The presets come from `pickValues` in `config.js` until the league has enough past rookie drafts, and after that from this league's own rookie averages.
+
 ## Optional settings
 
 Both live in `config.js`. To edit, click the file on GitHub, then the pencil icon.
 
 - `bylawsUrl`: paste a link to the bylaws, and it appears on the League page.
+- `pickValues`: preset points for unused draft picks by round.
 - `leagueId`: any season's league ID works. Leave it alone.
